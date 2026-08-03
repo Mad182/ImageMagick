@@ -483,19 +483,34 @@ static inline void AssociateAlphaPixelInfo(const QCubeInfo *cube_info,
   alpha_pixel->alpha=(double) pixel->alpha;
 }
 
+typedef struct _QColorKey {
+  unsigned char r, g, b, a;
+} QColorKey;
+
+static inline void InitQColorKey(QColorKey *key, const DoublePixelPacket *pixel)
+{
+  key->r = ScaleQuantumToChar(ClampPixel(pixel->red));
+  key->g = ScaleQuantumToChar(ClampPixel(pixel->green));
+  key->b = ScaleQuantumToChar(ClampPixel(pixel->blue));
+  key->a = ScaleQuantumToChar(ClampPixel(pixel->alpha));
+}
+
+static inline size_t FastColorToQNodeId(const QColorKey *key, size_t index, MagickBooleanType associate_alpha)
+{
+  size_t id = ((key->r >> index) & 0x01) |
+             (((key->g >> index) & 0x01) << 1) |
+             (((key->b >> index) & 0x01) << 2);
+  if (associate_alpha != MagickFalse)
+    id |= (((key->a >> index) & 0x01) << 3);
+  return id;
+}
+
 static inline size_t ColorToQNodeId(const QCubeInfo *cube_info,
   const DoublePixelPacket *pixel,size_t index)
 {
-  size_t
-    id;
-
-  id=(size_t) (((ScaleQuantumToChar(ClampPixel(pixel->red)) >> index) & 0x01) |
-    ((ScaleQuantumToChar(ClampPixel(pixel->green)) >> index) & 0x01) << 1 |
-    ((ScaleQuantumToChar(ClampPixel(pixel->blue)) >> index) & 0x01) << 2);
-  if (cube_info->associate_alpha != MagickFalse)
-    id|=((((size_t) ScaleQuantumToChar(ClampPixel(pixel->alpha)) >> index) &
-      0x1) << 3);
-  return(id);
+  QColorKey key;
+  InitQColorKey(&key, pixel);
+  return FastColorToQNodeId(&key, index, cube_info->associate_alpha);
 }
 
 static MagickBooleanType AssignImageColors(Image *image,QCubeInfo *cube_info,
@@ -579,15 +594,14 @@ static MagickBooleanType AssignImageColors(Image *image,QCubeInfo *cube_info,
           /*
             Identify the deepest node containing the pixel's color.
           */
-          for (count=1; (x+count) < (ssize_t) image->columns; count++)
           {
-            PixelInfo
-              packet;
-
-            GetPixelInfoPixel(image,q+count*(ssize_t) GetPixelChannels(image),
-              &packet);
-            if (IsPixelEquivalent(image,q,&packet) == MagickFalse)
-              break;
+            size_t number_channels = GetPixelChannels(image);
+            size_t channel_bytes = number_channels * sizeof(Quantum);
+            for (count=1; (x+count) < (ssize_t) image->columns; count++)
+            {
+              if (memcmp(q, q+count*(ssize_t) number_channels, channel_bytes) != 0)
+                break;
+            }
           }
           AssociateAlphaPixel(image,&cube,q,&pixel);
           node_info=cube.root;
@@ -829,28 +843,30 @@ static MagickBooleanType ClassifyImageColors(QCubeInfo *cube_info,
       /*
         Start at the root and descend the color cube tree.
       */
-      for (count=1; (x+(ssize_t) count) < (ssize_t) image->columns; count++)
       {
-        PixelInfo
-          packet;
-
-        GetPixelInfoPixel(image,p+count*(ssize_t) GetPixelChannels(image),
-          &packet);
-        if (IsPixelEquivalent(image,p,&packet) == MagickFalse)
-          break;
+        size_t number_channels = GetPixelChannels(image);
+        size_t channel_bytes = number_channels * sizeof(Quantum);
+        for (count=1; (x+(ssize_t) count) < (ssize_t) image->columns; count++)
+        {
+          if (memcmp(p, p+count*(ssize_t) number_channels, channel_bytes) != 0)
+            break;
+        }
       }
       AssociateAlphaPixel(image,cube_info,p,&pixel);
       index=MaxTreeDepth-1;
       bisect=((double) QuantumRange+1.0)/2.0;
       mid=midpoint;
       node_info=cube_info->root;
-      for (level=1; level <= MaxTreeDepth; level++)
       {
-        double
-          distance;
+        QColorKey key;
+        InitQColorKey(&key, &pixel);
+        for (level=1; level <= MaxTreeDepth; level++)
+        {
+          double
+            distance;
 
-        bisect*=0.5;
-        id=ColorToQNodeId(cube_info,&pixel,index);
+          bisect*=0.5;
+          id=FastColorToQNodeId(&key,index,cube_info->associate_alpha);
         mid.red+=(id & 1) != 0 ? bisect : -bisect;
         mid.green+=(id & 2) != 0 ? bisect : -bisect;
         mid.blue+=(id & 4) != 0 ? bisect : -bisect;
@@ -887,6 +903,7 @@ static MagickBooleanType ClassifyImageColors(QCubeInfo *cube_info,
         node_info->quantize_error+=count*sqrt(distance);
         cube_info->root->quantize_error+=node_info->quantize_error;
         index--;
+      }
       }
       /*
         Sum RGB for this leaf for later derivation of the mean cube color.
@@ -1793,9 +1810,12 @@ static MagickBooleanType RiemersmaDither(Image *image,CacheView *image_view,
       p->error[ErrorQueueLength-1].blue=pixel.blue-color.blue;
       if (cube_info->associate_alpha != MagickFalse)
         p->error[ErrorQueueLength-1].alpha=pixel.alpha-color.alpha;
-      proceed=SetImageProgress(image,DitherImageTag,p->offset,p->span);
-      if (proceed == MagickFalse)
-        return(MagickFalse);
+      if ((p->offset & 1023) == 0)
+        {
+          proceed=SetImageProgress(image,DitherImageTag,p->offset,p->span);
+          if (proceed == MagickFalse)
+            return(MagickFalse);
+        }
       p->offset++;
     }
   switch (direction)

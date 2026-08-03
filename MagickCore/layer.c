@@ -179,6 +179,9 @@ static MagickBooleanType IsBoundsCleared(const Image *image1,
 
   if (bounds->x < 0)
     return(MagickFalse);
+  if ((GetPixelAlphaTraits(image1) == UndefinedPixelTrait) &&
+      (GetPixelAlphaTraits(image2) == UndefinedPixelTrait))
+    return(MagickFalse);
   for (y=0; y < (ssize_t) bounds->height; y++)
   {
     p=GetVirtualPixels(image1,bounds->x,bounds->y+y,bounds->width,1,exception);

@@ -649,37 +649,41 @@ static MagickBooleanType EncodeImage(const ImageInfo *image_info,Image *image,
   /*
     Encode pixels.
   */
-  offset=0;
-  pass=0;
-  waiting_code=0;
-  for (y=0; y < (ssize_t) image->rows; y++)
   {
-    const Quantum
-      *magick_restrict p;
+    ssize_t index_offset = image->channel_map[IndexPixelChannel].offset;
+    size_t number_channels = image->number_channels;
 
-    ssize_t
-      x;
-
-    p=GetVirtualPixels(image,0,offset,image->columns,1,exception);
-    if (p == (const Quantum *) NULL)
-      break;
-    if (y == 0)
-      {
-        waiting_code=(short) GetPixelIndex(image,p);
-        p+=(ptrdiff_t) GetPixelChannels(image);
-      }
-    for (x=(ssize_t) (y == 0 ? 1 : 0); x < (ssize_t) image->columns; x++)
+    offset=0;
+    pass=0;
+    waiting_code=0;
+    for (y=0; y < (ssize_t) image->rows; y++)
     {
-      /*
-        Probe hash table.
-      */
-      next_pixel=MagickFalse;
-      displacement=1;
-      index=(Quantum) ((size_t) GetPixelIndex(image,p) & 0xff);
-      p+=(ptrdiff_t) GetPixelChannels(image);
-      k=(ssize_t) (((size_t) index << (MaxGIFBits-8))+(size_t) waiting_code);
-      if (k >= MaxHashTable)
-        k-=MaxHashTable;
+      const Quantum
+        *magick_restrict p;
+
+      ssize_t
+        x;
+
+      p=GetVirtualPixels(image,0,offset,image->columns,1,exception);
+      if (p == (const Quantum *) NULL)
+        break;
+      if (y == 0)
+        {
+          waiting_code=(short) ((ssize_t) p[index_offset] & 0xff);
+          p+=(ptrdiff_t) number_channels;
+        }
+      for (x=(ssize_t) (y == 0 ? 1 : 0); x < (ssize_t) image->columns; x++)
+      {
+        /*
+          Probe hash table.
+        */
+        next_pixel=MagickFalse;
+        displacement=1;
+        index=(Quantum) ((ssize_t) p[index_offset] & 0xff);
+        p+=(ptrdiff_t) number_channels;
+        k=(ssize_t) (((size_t) index << (MaxGIFBits-8))+(size_t) waiting_code);
+        if (k >= MaxHashTable)
+          k-=MaxHashTable;
       if (k < 0)
         continue;
       if (hash_code[k] > 0)
@@ -776,6 +780,7 @@ static MagickBooleanType EncodeImage(const ImageInfo *image_info,Image *image,
           break;
         }
       }
+  }
   }
   /*
     Flush out the buffered code.
@@ -1382,8 +1387,6 @@ static Image *ReadGIFImage(const ImageInfo *image_info,ExceptionInfo *exception)
     profiles=DestroyLinkedList(profiles,DestroyGIFProfile);
   meta_image=DestroyImage(meta_image);
   global_colormap=(unsigned char *) RelinquishMagickMemory(global_colormap);
-  if ((image->columns == 0) || (image->rows == 0))
-    ThrowReaderException(CorruptImageError,"NegativeOrZeroImageSize");
   if (CloseBlob(image) == MagickFalse)
     status=MagickFalse;
   if (status == MagickFalse)
@@ -1625,7 +1628,8 @@ static MagickBooleanType WriteGIFImage(const ImageInfo *image_info,Image *image,
             }
         if (opacity == -1)
           {
-            (void) SetImageType(image,PaletteBilevelAlphaType,exception);
+            if ((image->storage_class == DirectClass) || (image->colors > 256))
+              (void) SetImageType(image,PaletteBilevelAlphaType,exception);
             for (i=0; i < (ssize_t) image->colors; i++)
               if (image->colormap[i].alpha != (double) OpaqueAlpha)
                 {

@@ -2377,6 +2377,16 @@ MagickExport MagickBooleanType CompositeImage(Image *image,
       */
       Sa=QuantumScale*(double) GetPixelAlpha(source_image,p);
       Da=QuantumScale*(double) GetPixelAlpha(image,q);
+      if (((compose == OverCompositeOp) || (compose == CopyCompositeOp) || (compose == SrcOverCompositeOp)) && (Sa >= 1.0) && (GetPixelChannels(source_image) == GetPixelChannels(image)))
+        {
+          size_t channels = GetPixelChannels(image);
+          size_t i;
+          for (i=0; i < channels; i++)
+            q[i]=p[i];
+          p+=(ptrdiff_t) channels;
+          q+=(ptrdiff_t) channels;
+          continue;
+        }
       switch (compose)
       {
         case BumpmapCompositeOp:
