@@ -267,12 +267,6 @@ static inline int GetNextLZWCode(LZWInfo *lzw_info,const size_t bits)
   int
     code;
 
-  ssize_t
-    i;
-
-  size_t
-    one;
-
   while (((lzw_info->code_info.bit+bits) > (8*lzw_info->code_info.count)) &&
          (lzw_info->code_info.eof == MagickFalse))
   {
@@ -294,13 +288,13 @@ static inline int GetNextLZWCode(LZWInfo *lzw_info,const size_t bits)
   }
   if ((lzw_info->code_info.bit+bits) > (8*lzw_info->code_info.count))
     return(-1);
-  code=0;
-  one=1;
-  for (i=0; i < (ssize_t) bits; i++)
   {
-    code|=((lzw_info->code_info.buffer[lzw_info->code_info.bit/8] &
-      (one << (lzw_info->code_info.bit % 8))) != 0) << i;
-    lzw_info->code_info.bit++;
+    uint32_t datum;
+    size_t byte_idx = lzw_info->code_info.bit >> 3;
+    size_t bit_shift = lzw_info->code_info.bit & 7;
+    (void) memcpy(&datum, &lzw_info->code_info.buffer[byte_idx], sizeof(datum));
+    code = (int) ((datum >> bit_shift) & ((1U << bits) - 1));
+    lzw_info->code_info.bit += bits;
   }
   return(code);
 }
@@ -402,6 +396,7 @@ static MagickBooleanType DecodeImage(Image *image,const ssize_t opacity,
     *lzw_info;
 
   size_t
+    number_channels,
     pass;
 
   ssize_t
@@ -428,35 +423,37 @@ static MagickBooleanType DecodeImage(Image *image,const ssize_t opacity,
       image->filename);
   pass=0;
   offset=0;
-  for (y=0; y < (ssize_t) image->rows; y++)
-  {
-    ssize_t
-      x;
+  number_channels=GetPixelChannels(image);
 
-    Quantum
-      *magick_restrict q;
-
-    q=QueueAuthenticPixels(image,0,offset,image->columns,1,exception);
-    if (q == (Quantum *) NULL)
-      break;
-    for (x=0; x < (ssize_t) image->columns; )
+    for (y=0; y < (ssize_t) image->rows; y++)
     {
-      c=ReadBlobLZWByte(lzw_info);
-      if (c < 0)
+      ssize_t
+        x;
+
+      Quantum
+        *magick_restrict q;
+
+      q=QueueAuthenticPixels(image,0,offset,image->columns,1,exception);
+      if (q == (Quantum *) NULL)
         break;
-      index=ConstrainColormapIndex(image,(ssize_t) c,exception);
-      SetPixelIndex(image,(Quantum) index,q);
-      SetPixelViaPixelInfo(image,image->colormap+index,q);
-      SetPixelAlpha(image,index == opacity ? TransparentAlpha : OpaqueAlpha,q);
-      x++;
-      q+=(ptrdiff_t) GetPixelChannels(image);
-    }
-    if (SyncAuthenticPixels(image,exception) == MagickFalse)
-      break;
-    if (x < (ssize_t) image->columns)
-      break;
-    if (image->interlace == NoInterlace)
-      offset++;
+      for (x=0; x < (ssize_t) image->columns; )
+      {
+        c=ReadBlobLZWByte(lzw_info);
+        if (c < 0)
+          break;
+        index=ConstrainColormapIndex(image,(ssize_t) c,exception);
+        SetPixelIndex(image,(Quantum) index,q);
+        SetPixelViaPixelInfo(image,image->colormap+index,q);
+        SetPixelAlpha(image,index == opacity ? TransparentAlpha : OpaqueAlpha,q);
+        x++;
+        q+=(ptrdiff_t) number_channels;
+      }
+      if (SyncAuthenticPixels(image,exception) == MagickFalse)
+        break;
+      if (x < (ssize_t) image->columns)
+        break;
+      if (image->interlace == NoInterlace)
+        offset++;
     else
       {
         switch (pass)
@@ -575,13 +572,24 @@ static MagickBooleanType EncodeImage(const ImageInfo *image_info,Image *image,
     } \
 }
 
+typedef struct _GIFHashEntry
+{
+  short
+    code,
+    prefix;
+
+  unsigned char
+    suffix;
+} GIFHashEntry;
+
   Quantum
     index;
 
   short
-    *hash_code,
-    *hash_prefix,
     waiting_code;
+
+  GIFHashEntry
+    *hash_table;
 
   size_t
     bits,
@@ -603,8 +611,7 @@ static MagickBooleanType EncodeImage(const ImageInfo *image_info,Image *image,
     y;
 
   unsigned char
-    *packet,
-    *hash_suffix;
+    *packet;
 
   /*
     Allocate encoder tables.
@@ -612,31 +619,20 @@ static MagickBooleanType EncodeImage(const ImageInfo *image_info,Image *image,
   assert(image != (Image *) NULL);
   one=1;
   packet=(unsigned char *) AcquireQuantumMemory(256,sizeof(*packet));
-  hash_code=(short *) AcquireQuantumMemory(MaxHashTable,sizeof(*hash_code));
-  hash_prefix=(short *) AcquireQuantumMemory(MaxHashTable,sizeof(*hash_prefix));
-  hash_suffix=(unsigned char *) AcquireQuantumMemory(MaxHashTable,
-    sizeof(*hash_suffix));
-  if ((packet == (unsigned char *) NULL) || (hash_code == (short *) NULL) ||
-      (hash_prefix == (short *) NULL) ||
-      (hash_suffix == (unsigned char *) NULL))
+  hash_table=(GIFHashEntry *) AcquireQuantumMemory(MaxHashTable,sizeof(*hash_table));
+  if ((packet == (unsigned char *) NULL) || (hash_table == (GIFHashEntry *) NULL))
     {
       if (packet != (unsigned char *) NULL)
         packet=(unsigned char *) RelinquishMagickMemory(packet);
-      if (hash_code != (short *) NULL)
-        hash_code=(short *) RelinquishMagickMemory(hash_code);
-      if (hash_prefix != (short *) NULL)
-        hash_prefix=(short *) RelinquishMagickMemory(hash_prefix);
-      if (hash_suffix != (unsigned char *) NULL)
-        hash_suffix=(unsigned char *) RelinquishMagickMemory(hash_suffix);
+      if (hash_table != (GIFHashEntry *) NULL)
+        hash_table=(GIFHashEntry *) RelinquishMagickMemory(hash_table);
       return(MagickFalse);
     }
   /*
     Initialize GIF encoder.
   */
   (void) memset(packet,0,256*sizeof(*packet));
-  (void) memset(hash_code,0,MaxHashTable*sizeof(*hash_code));
-  (void) memset(hash_prefix,0,MaxHashTable*sizeof(*hash_prefix));
-  (void) memset(hash_suffix,0,MaxHashTable*sizeof(*hash_suffix));
+  (void) memset(hash_table,0,MaxHashTable*sizeof(*hash_table));
   number_bits=data_size;
   max_code=MaxCode(number_bits);
   clear_code=(size_t) ((short) one << (data_size-1));
@@ -686,12 +682,12 @@ static MagickBooleanType EncodeImage(const ImageInfo *image_info,Image *image,
           k-=MaxHashTable;
       if (k < 0)
         continue;
-      if (hash_code[k] > 0)
+      if (hash_table[k].code > 0)
         {
-          if ((hash_prefix[k] == waiting_code) &&
-              (hash_suffix[k] == (unsigned char) index))
+          if ((hash_table[k].prefix == waiting_code) &&
+              (hash_table[k].suffix == (unsigned char) index))
             {
-              waiting_code=hash_code[k];
+              waiting_code=hash_table[k].code;
               continue;
             }
           if (k != 0)
@@ -701,12 +697,12 @@ static MagickBooleanType EncodeImage(const ImageInfo *image_info,Image *image,
             k-=displacement;
             if (k < 0)
               k+=MaxHashTable;
-            if (hash_code[k] == 0)
+            if (hash_table[k].code == 0)
               break;
-            if ((hash_prefix[k] == waiting_code) &&
-                (hash_suffix[k] == (unsigned char) index))
+            if ((hash_table[k].prefix == waiting_code) &&
+                (hash_table[k].suffix == (unsigned char) index))
               {
-                waiting_code=hash_code[k];
+                waiting_code=hash_table[k].code;
                 next_pixel=MagickTrue;
                 break;
               }
@@ -717,17 +713,16 @@ static MagickBooleanType EncodeImage(const ImageInfo *image_info,Image *image,
       GIFOutputCode(waiting_code);
       if (free_code < MaxGIFTable)
         {
-          hash_code[k]=(short) free_code++;
-          hash_prefix[k]=waiting_code;
-          hash_suffix[k]=(unsigned char) index;
+          hash_table[k].code=(short) free_code++;
+          hash_table[k].prefix=waiting_code;
+          hash_table[k].suffix=(unsigned char) index;
         }
       else
         {
           /*
             Fill the hash table with empty entries.
           */
-          for (k=0; k < MaxHashTable; k++)
-            hash_code[k]=0;
+          (void) memset(hash_table,0,MaxHashTable*sizeof(*hash_table));
           /*
             Reset compressor and issue a clear code.
           */
@@ -811,9 +806,7 @@ static MagickBooleanType EncodeImage(const ImageInfo *image_info,Image *image,
   /*
     Free encoder memory.
   */
-  hash_suffix=(unsigned char *) RelinquishMagickMemory(hash_suffix);
-  hash_prefix=(short *) RelinquishMagickMemory(hash_prefix);
-  hash_code=(short *) RelinquishMagickMemory(hash_code);
+  hash_table=(GIFHashEntry *) RelinquishMagickMemory(hash_table);
   packet=(unsigned char *) RelinquishMagickMemory(packet);
   return(MagickTrue);
 }
@@ -881,20 +874,20 @@ static MagickBooleanType IsGIF(const unsigned char *magick,const size_t length)
 */
 static ssize_t ReadBlobBlock(Image *image,unsigned char *data)
 {
+  int
+    c;
+
   ssize_t
     count;
-
-  unsigned char
-    block_count = 0;
 
   assert(image != (Image *) NULL);
   assert(image->signature == MagickCoreSignature);
   assert(data != (unsigned char *) NULL);
-  count=ReadBlob(image,1,&block_count);
-  if (count != 1)
+  c=ReadBlobByte(image);
+  if (c <= 0)
     return(0);
-  count=ReadBlob(image,(size_t) block_count,data);
-  if (count != (ssize_t) block_count)
+  count=ReadBlob(image,(size_t) (unsigned char) c,data);
+  if (count != (ssize_t) (unsigned char) c)
     return(0);
   return(count);
 }

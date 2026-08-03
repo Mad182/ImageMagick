@@ -1055,83 +1055,160 @@ static unsigned char *FilterAPNGRows(const unsigned char *rgba,int w,int h,
 
   int
     best_filter,
-    ftype,
     stride,
     x,
     y;
-
-  long
-    best_sum,
-    sum;
 
   size_t
     opos;
 
   unsigned char
+    *filter_buf,
     *out;
 
   stride=w*4;
   *filtered_size=(size_t) h*(1+stride);
   out=(unsigned char *) AcquireQuantumMemory(*filtered_size,sizeof(*out));
-  if (out == (unsigned char *) NULL)
-    return((unsigned char *) NULL);
+  filter_buf=(unsigned char *) AcquireQuantumMemory((size_t) 5*stride,sizeof(*filter_buf));
+  if ((out == (unsigned char *) NULL) || (filter_buf == (unsigned char *) NULL))
+    {
+      if (out != (unsigned char *) NULL)
+        out=(unsigned char *) RelinquishMagickMemory(out);
+      if (filter_buf != (unsigned char *) NULL)
+        filter_buf=(unsigned char *) RelinquishMagickMemory(filter_buf);
+      return((unsigned char *) NULL);
+    }
   opos=0;
   for (y=0; y < h; y++)
   {
+    long
+      best_sum = LONG_MAX,
+      sum;
+
+    unsigned char
+      *f0 = filter_buf,
+      *f1 = filter_buf + stride,
+      *f2 = filter_buf + 2*stride,
+      *f3 = filter_buf + 3*stride,
+      *f4 = filter_buf + 4*stride;
+
     row=rgba+y*stride;
     prev=(y > 0) ? rgba+(y-1)*stride : (const unsigned char *) NULL;
-    best_filter=0;
-    best_sum=LONG_MAX;
-    for (ftype=0; ftype < 5; ftype++)
-    {
-      sum=0;
-      for (x=0; x < stride; x++)
-      {
-        int
-          a,b_val,c_val,val=0;
 
-        a=(x >= 4) ? (int) row[x-4] : 0;
-        b_val=prev ? (int) prev[x] : 0;
-        c_val=(prev && x >= 4) ? (int) prev[x-4] : 0;
-        switch (ftype)
-        {
-          case 0: val=(int) row[x]; break;
-          case 1: val=((int) row[x]-a) & 0xff; break;
-          case 2: val=((int) row[x]-b_val) & 0xff; break;
-          case 3: val=((int) row[x]-((a+b_val) >> 1)) & 0xff; break;
-          case 4: val=((int) row[x]-(int) PaethPredictor(a,b_val,
-            c_val)) & 0xff; break;
-        }
-        sum+=(val < 128) ? val : 256-val;
-      }
-      if (sum < best_sum)
-        {
-          best_sum=sum;
-          best_filter=ftype;
-        }
-    }
-    out[opos++]=(unsigned char) best_filter;
+    /* Filter 0: None */
+    sum=0;
     for (x=0; x < stride; x++)
     {
-      int
-        a,b_val,c_val;
-
-      a=(x >= 4) ? (int) row[x-4] : 0;
-      b_val=prev ? (int) prev[x] : 0;
-      c_val=(prev && x >= 4) ? (int) prev[x-4] : 0;
-      switch (best_filter)
-      {
-        case 0: out[opos++]=row[x]; break;
-        case 1: out[opos++]=(unsigned char) (((int) row[x]-a) & 0xff); break;
-        case 2: out[opos++]=(unsigned char) (((int) row[x]-b_val) & 0xff);
-          break;
-        case 3: out[opos++]=(unsigned char) (((int) row[x]-
-          ((a+b_val) >> 1)) & 0xff); break;
-        case 4: out[opos++]=(unsigned char) (((int) row[x]-
-          (int) PaethPredictor(a,b_val,c_val)) & 0xff); break;
-      }
+      int val = (int) row[x];
+      f0[x] = (unsigned char) val;
+      sum += (val < 128) ? val : 256 - val;
     }
+    best_filter = 0;
+    best_sum = sum;
+
+    /* Filter 1: Sub */
+    sum=0;
+    for (x=0; x < 4; x++)
+    {
+      int val = (int) row[x];
+      f1[x] = (unsigned char) val;
+      sum += (val < 128) ? val : 256 - val;
+    }
+    for (x=4; x < stride; x++)
+    {
+      int val = ((int) row[x] - (int) row[x-4]) & 0xff;
+      f1[x] = (unsigned char) val;
+      sum += (val < 128) ? val : 256 - val;
+    }
+    if (sum < best_sum)
+      {
+        best_sum = sum;
+        best_filter = 1;
+      }
+
+    /* Filter 2: Up */
+    sum=0;
+    if (prev == (const unsigned char *) NULL)
+      {
+        (void) memcpy(f2, f0, stride);
+        sum = best_sum; /* Same as type 0 when prev is NULL */
+      }
+    else
+      {
+        for (x=0; x < stride; x++)
+        {
+          int val = ((int) row[x] - (int) prev[x]) & 0xff;
+          f2[x] = (unsigned char) val;
+          sum += (val < 128) ? val : 256 - val;
+        }
+      }
+    if (sum < best_sum)
+      {
+        best_sum = sum;
+        best_filter = 2;
+      }
+
+    /* Filter 3: Average */
+    sum=0;
+    if (prev == (const unsigned char *) NULL)
+      {
+        (void) memcpy(f3, f1, stride);
+        sum = best_sum;
+      }
+    else
+      {
+        for (x=0; x < 4; x++)
+        {
+          int val = ((int) row[x] - ((int) prev[x] >> 1)) & 0xff;
+          f3[x] = (unsigned char) val;
+          sum += (val < 128) ? val : 256 - val;
+        }
+        for (x=4; x < stride; x++)
+        {
+          int val = ((int) row[x] - (((int) row[x-4] + (int) prev[x]) >> 1)) & 0xff;
+          f3[x] = (unsigned char) val;
+          sum += (val < 128) ? val : 256 - val;
+        }
+      }
+    if (sum < best_sum)
+      {
+        best_sum = sum;
+        best_filter = 3;
+      }
+
+    /* Filter 4: Paeth */
+    sum=0;
+    if (prev == (const unsigned char *) NULL)
+      {
+        (void) memcpy(f4, f1, stride);
+        sum = best_sum;
+      }
+    else
+      {
+        for (x=0; x < 4; x++)
+        {
+          int val = ((int) row[x] - (int) PaethPredictor(0, prev[x], 0)) & 0xff;
+          f4[x] = (unsigned char) val;
+          sum += (val < 128) ? val : 256 - val;
+        }
+        for (x=4; x < stride; x++)
+        {
+          int val = ((int) row[x] - (int) PaethPredictor(row[x-4], prev[x], prev[x-4])) & 0xff;
+          f4[x] = (unsigned char) val;
+          sum += (val < 128) ? val : 256 - val;
+        }
+      }
+    if (sum < best_sum)
+      {
+        best_sum = sum;
+        best_filter = 4;
+      }
+
+    out[opos++] = (unsigned char) best_filter;
+    (void) memcpy(out + opos, filter_buf + best_filter * stride, stride);
+    opos += stride;
   }
+  filter_buf=(unsigned char *) RelinquishMagickMemory(filter_buf);
   return(out);
 }
 
@@ -1181,9 +1258,14 @@ static unsigned char *GetImageRGBA(Image *image,ExceptionInfo *exception)
     *p;
 
   size_t
+    channels,
     idx;
 
   ssize_t
+    a_off,
+    b_off,
+    g_off,
+    r_off,
     x,
     y;
 
@@ -1194,6 +1276,12 @@ static unsigned char *GetImageRGBA(Image *image,ExceptionInfo *exception)
     (size_t) image->rows,4);
   if (rgba == (unsigned char *) NULL)
     return((unsigned char *) NULL);
+  channels=GetPixelChannels(image);
+  r_off=GetPixelChannelOffset(image,RedPixelChannel);
+  g_off=GetPixelChannelOffset(image,GreenPixelChannel);
+  b_off=GetPixelChannelOffset(image,BluePixelChannel);
+  a_off=GetPixelChannelOffset(image,AlphaPixelChannel);
+
   for (y=0; y < (ssize_t) image->rows; y++)
   {
     p=GetVirtualPixels(image,0,y,image->columns,1,exception);
@@ -1202,14 +1290,16 @@ static unsigned char *GetImageRGBA(Image *image,ExceptionInfo *exception)
         rgba=(unsigned char *) RelinquishMagickMemory(rgba);
         return((unsigned char *) NULL);
       }
+    idx=((size_t) y * (size_t) image->columns) * 4;
     for (x=0; x < (ssize_t) image->columns; x++)
     {
-      idx=((size_t) y*image->columns+(size_t) x)*4;
-      rgba[idx]=(unsigned char) ScaleQuantumToChar(GetPixelRed(image,p));
-      rgba[idx+1]=(unsigned char) ScaleQuantumToChar(GetPixelGreen(image,p));
-      rgba[idx+2]=(unsigned char) ScaleQuantumToChar(GetPixelBlue(image,p));
-      rgba[idx+3]=(unsigned char) ScaleQuantumToChar(GetPixelAlpha(image,p));
-      p+=GetPixelChannels(image);
+      rgba[idx]=(unsigned char) ScaleQuantumToChar(p[r_off]);
+      rgba[idx+1]=(unsigned char) ScaleQuantumToChar(p[g_off]);
+      rgba[idx+2]=(unsigned char) ScaleQuantumToChar(p[b_off]);
+      rgba[idx+3]=(a_off < (ssize_t) channels) ?
+        (unsigned char) ScaleQuantumToChar(p[a_off]) : 255;
+      idx+=4;
+      p+=channels;
     }
   }
   return(rgba);
