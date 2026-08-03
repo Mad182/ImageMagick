@@ -1046,8 +1046,8 @@ static MagickBooleanType WritePNGChunk(Image *image,const char *type,
   return(MagickTrue);
 }
 
-static unsigned char *FilterAPNGRows(const unsigned char *rgba,int w,int h,
-  size_t *filtered_size)
+static unsigned char *FilterAPNGRows(const unsigned char *pixels,int w,int h,
+  int bpp,size_t *filtered_size)
 {
   const unsigned char
     *prev,
@@ -1066,7 +1066,7 @@ static unsigned char *FilterAPNGRows(const unsigned char *rgba,int w,int h,
     *filter_buf,
     *out;
 
-  stride=w*4;
+  stride=w*bpp;
   *filtered_size=(size_t) h*(1+stride);
   out=(unsigned char *) AcquireQuantumMemory(*filtered_size,sizeof(*out));
   filter_buf=(unsigned char *) AcquireQuantumMemory((size_t) 5*stride,sizeof(*filter_buf));
@@ -1092,8 +1092,8 @@ static unsigned char *FilterAPNGRows(const unsigned char *rgba,int w,int h,
       *f3 = filter_buf + 3*stride,
       *f4 = filter_buf + 4*stride;
 
-    row=rgba+y*stride;
-    prev=(y > 0) ? rgba+(y-1)*stride : (const unsigned char *) NULL;
+    row=pixels+y*stride;
+    prev=(y > 0) ? pixels+(y-1)*stride : (const unsigned char *) NULL;
 
     /* Filter 0: None */
     sum=0;
@@ -1108,15 +1108,15 @@ static unsigned char *FilterAPNGRows(const unsigned char *rgba,int w,int h,
 
     /* Filter 1: Sub */
     sum=0;
-    for (x=0; x < 4; x++)
+    for (x=0; x < bpp; x++)
     {
       int val = (int) row[x];
       f1[x] = (unsigned char) val;
       sum += (val < 128) ? val : 256 - val;
     }
-    for (x=4; x < stride; x++)
+    for (x=bpp; x < stride; x++)
     {
-      int val = ((int) row[x] - (int) row[x-4]) & 0xff;
+      int val = ((int) row[x] - (int) row[x-bpp]) & 0xff;
       f1[x] = (unsigned char) val;
       sum += (val < 128) ? val : 256 - val;
     }
@@ -1131,7 +1131,7 @@ static unsigned char *FilterAPNGRows(const unsigned char *rgba,int w,int h,
     if (prev == (const unsigned char *) NULL)
       {
         (void) memcpy(f2, f0, stride);
-        sum = best_sum; /* Same as type 0 when prev is NULL */
+        sum = best_sum;
       }
     else
       {
@@ -1157,15 +1157,15 @@ static unsigned char *FilterAPNGRows(const unsigned char *rgba,int w,int h,
       }
     else
       {
-        for (x=0; x < 4; x++)
+        for (x=0; x < bpp; x++)
         {
           int val = ((int) row[x] - ((int) prev[x] >> 1)) & 0xff;
           f3[x] = (unsigned char) val;
           sum += (val < 128) ? val : 256 - val;
         }
-        for (x=4; x < stride; x++)
+        for (x=bpp; x < stride; x++)
         {
-          int val = ((int) row[x] - (((int) row[x-4] + (int) prev[x]) >> 1)) & 0xff;
+          int val = ((int) row[x] - (((int) row[x-bpp] + (int) prev[x]) >> 1)) & 0xff;
           f3[x] = (unsigned char) val;
           sum += (val < 128) ? val : 256 - val;
         }
@@ -1185,15 +1185,15 @@ static unsigned char *FilterAPNGRows(const unsigned char *rgba,int w,int h,
       }
     else
       {
-        for (x=0; x < 4; x++)
+        for (x=0; x < bpp; x++)
         {
           int val = ((int) row[x] - (int) PaethPredictor(0, prev[x], 0)) & 0xff;
           f4[x] = (unsigned char) val;
           sum += (val < 128) ? val : 256 - val;
         }
-        for (x=4; x < stride; x++)
+        for (x=bpp; x < stride; x++)
         {
-          int val = ((int) row[x] - (int) PaethPredictor(row[x-4], prev[x], prev[x-4])) & 0xff;
+          int val = ((int) row[x] - (int) PaethPredictor(row[x-bpp], prev[x], prev[x-bpp])) & 0xff;
           f4[x] = (unsigned char) val;
           sum += (val < 128) ? val : 256 - val;
         }
@@ -1212,8 +1212,8 @@ static unsigned char *FilterAPNGRows(const unsigned char *rgba,int w,int h,
   return(out);
 }
 
-static MagickBooleanType CompressAPNGFrame(const unsigned char *rgba,int w,
-  int h,unsigned char **comp_data,size_t *comp_size)
+static MagickBooleanType CompressAPNGFrame(const unsigned char *pixels,int w,
+  int h,int bpp,unsigned char **comp_data,size_t *comp_size)
 {
   int
     ret;
@@ -1228,7 +1228,7 @@ static MagickBooleanType CompressAPNGFrame(const unsigned char *rgba,int w,
     *compressed,
     *filtered;
 
-  filtered=FilterAPNGRows(rgba,w,h,&filtered_size);
+  filtered=FilterAPNGRows(pixels,w,h,bpp,&filtered_size);
   if (filtered == (unsigned char *) NULL)
     return(MagickFalse);
   comp_len=compressBound((uLong) filtered_size);
@@ -1240,7 +1240,7 @@ static MagickBooleanType CompressAPNGFrame(const unsigned char *rgba,int w,
       return(MagickFalse);
     }
   ret=compress2(compressed,&comp_len,filtered,(uLong) filtered_size,
-    Z_DEFAULT_COMPRESSION);
+    Z_BEST_COMPRESSION);
   filtered=(unsigned char *) RelinquishMagickMemory(filtered);
   if (ret != Z_OK)
     {
@@ -1311,6 +1311,8 @@ static void CleanupFramePixels(unsigned char **frame_pixels,
   size_t
     i;
 
+  if (frame_pixels == (unsigned char **) NULL)
+    return;
   for (i=0; i < frame_count; i++)
     if (frame_pixels[i] != (unsigned char *) NULL)
       frame_pixels[i]=(unsigned char *)
@@ -1318,23 +1320,111 @@ static void CleanupFramePixels(unsigned char **frame_pixels,
   frame_pixels=(unsigned char **) RelinquishMagickMemory(frame_pixels);
 }
 
+typedef struct _APNGColor
+{
+  unsigned char r, g, b, a;
+} APNGColor;
+
+static size_t BuildAPNGPalette(unsigned char **frame_pixels, size_t frame_count,
+  size_t np, APNGColor *palette, short *hash_head, short *hash_next)
+{
+  size_t
+    color_count,
+    fi,
+    px;
+
+  (void) memset(hash_head, -1, 65536 * sizeof(short));
+  (void) memset(hash_next, -1, 256 * sizeof(short));
+  color_count = 0;
+
+  for (fi = 0; fi < frame_count; fi++)
+  {
+    const unsigned char *pix = frame_pixels[fi];
+    for (px = 0; px < np; px++)
+    {
+      unsigned char r = pix[px*4];
+      unsigned char g = pix[px*4+1];
+      unsigned char b = pix[px*4+2];
+      unsigned char a = pix[px*4+3];
+
+      unsigned short h = (unsigned short) (((r * 33 + g) * 33 + b) * 33 + a);
+      short idx = hash_head[h];
+      MagickBooleanType found = MagickFalse;
+
+      while (idx != -1)
+      {
+        if (palette[idx].r == r && palette[idx].g == g &&
+            palette[idx].b == b && palette[idx].a == a)
+        {
+          found = MagickTrue;
+          break;
+        }
+        idx = hash_next[idx];
+      }
+
+      if (found == MagickFalse)
+      {
+        if (color_count >= 256)
+          return(0); /* Exceeds 256 unique colors */
+        palette[color_count].r = r;
+        palette[color_count].g = g;
+        palette[color_count].b = b;
+        palette[color_count].a = a;
+        hash_next[color_count] = hash_head[h];
+        hash_head[h] = (short) color_count;
+        color_count++;
+      }
+    }
+  }
+  return(color_count);
+}
+
+static inline unsigned char LookupAPNGColorIndex(unsigned char r, unsigned char g,
+  unsigned char b, unsigned char a, const short *hash_head, const short *hash_next,
+  const APNGColor *palette)
+{
+  unsigned short h = (unsigned short) (((r * 33 + g) * 33 + b) * 33 + a);
+  short idx = hash_head[h];
+  while (idx != -1)
+  {
+    if (palette[idx].r == r && palette[idx].g == g &&
+        palette[idx].b == b && palette[idx].a == a)
+      return((unsigned char) idx);
+    idx = hash_next[idx];
+  }
+  return(0);
+}
+
 static MagickBooleanType WriteAPNGImage(const ImageInfo *image_info,
   Image *image,ExceptionInfo *exception)
 {
+  APNGColor
+    *palette;
+
   Image
     *next;
+
+  int
+    bpp,
+    color_type;
 
   MagickBooleanType
     has_transparency,
     status;
 
+  short
+    *hash_head,
+    *hash_next;
+
   size_t
+    color_count,
     fi,
     frame_count,
     np,
     px;
 
   unsigned char
+    **encoded_pixels,
     **frame_pixels;
 
   unsigned int
@@ -1367,8 +1457,9 @@ static MagickBooleanType WriteAPNGImage(const ImageInfo *image_info,
     }
   gw=(unsigned int) image->columns;
   gh=(unsigned int) image->rows;
+  np=(size_t) gw*gh;
   /*
-    Convert all frames to RGBA and ensure consistent alpha channel.
+    Convert all frames to RGBA.
   */
   frame_pixels=(unsigned char **) AcquireQuantumMemory(frame_count,
     sizeof(*frame_pixels));
@@ -1396,23 +1487,121 @@ static MagickBooleanType WriteAPNGImage(const ImageInfo *image_info,
     fi++;
   }
   /*
-    Check if any frame has transparent pixels.
+    Build palette or check transparency for RGB/RGBA.
   */
-  has_transparency=MagickFalse;
-  np=(size_t) gw*gh;
-  for (fi=0; fi < frame_count; fi++)
-  {
-    if (has_transparency != MagickFalse)
-      break;
-    for (px=0; px < np; px++)
+  palette=(APNGColor *) AcquireQuantumMemory(256,sizeof(*palette));
+  hash_head=(short *) AcquireQuantumMemory(65536,sizeof(*hash_head));
+  hash_next=(short *) AcquireQuantumMemory(256,sizeof(*hash_next));
+  if ((palette == (APNGColor *) NULL) || (hash_head == (short *) NULL) ||
+      (hash_next == (short *) NULL))
     {
-      if (frame_pixels[fi][px*4+3] < 255)
+      if (palette != (APNGColor *) NULL)
+        palette=(APNGColor *) RelinquishMagickMemory(palette);
+      if (hash_head != (short *) NULL)
+        hash_head=(short *) RelinquishMagickMemory(hash_head);
+      if (hash_next != (short *) NULL)
+        hash_next=(short *) RelinquishMagickMemory(hash_next);
+      CleanupFramePixels(frame_pixels,frame_count);
+      (void) CloseBlob(image);
+      ThrowWriterException(ResourceLimitError,"MemoryAllocationFailed");
+    }
+  color_count=BuildAPNGPalette(frame_pixels,frame_count,np,palette,hash_head,hash_next);
+
+  encoded_pixels=(unsigned char **) AcquireQuantumMemory(frame_count,
+    sizeof(*encoded_pixels));
+  if (encoded_pixels == (unsigned char **) NULL)
+    {
+      palette=(APNGColor *) RelinquishMagickMemory(palette);
+      hash_head=(short *) RelinquishMagickMemory(hash_head);
+      hash_next=(short *) RelinquishMagickMemory(hash_next);
+      CleanupFramePixels(frame_pixels,frame_count);
+      (void) CloseBlob(image);
+      ThrowWriterException(ResourceLimitError,"MemoryAllocationFailed");
+    }
+  (void) memset(encoded_pixels,0,frame_count*sizeof(*encoded_pixels));
+
+  if (color_count > 0)
+    {
+      /* Palette / Indexed mode (color type 3) */
+      color_type=3;
+      bpp=1;
+      for (fi=0; fi < frame_count; fi++)
+      {
+        encoded_pixels[fi]=(unsigned char *) AcquireQuantumMemory(np,sizeof(unsigned char));
+        if (encoded_pixels[fi] == (unsigned char *) NULL)
+          {
+            CleanupFramePixels(encoded_pixels,frame_count);
+            palette=(APNGColor *) RelinquishMagickMemory(palette);
+            hash_head=(short *) RelinquishMagickMemory(hash_head);
+            hash_next=(short *) RelinquishMagickMemory(hash_next);
+            CleanupFramePixels(frame_pixels,frame_count);
+            (void) CloseBlob(image);
+            ThrowWriterException(ResourceLimitError,"MemoryAllocationFailed");
+          }
+        for (px=0; px < np; px++)
         {
-          has_transparency=MagickTrue;
+          unsigned char r = frame_pixels[fi][px*4];
+          unsigned char g = frame_pixels[fi][px*4+1];
+          unsigned char b = frame_pixels[fi][px*4+2];
+          unsigned char a = frame_pixels[fi][px*4+3];
+          encoded_pixels[fi][px]=LookupAPNGColorIndex(r,g,b,a,hash_head,hash_next,palette);
+        }
+      }
+    }
+  else
+    {
+      /* Check if any frame has transparency */
+      has_transparency=MagickFalse;
+      for (fi=0; fi < frame_count; fi++)
+      {
+        if (has_transparency != MagickFalse)
           break;
+        for (px=0; px < np; px++)
+        {
+          if (frame_pixels[fi][px*4+3] < 255)
+            {
+              has_transparency=MagickTrue;
+              break;
+            }
+        }
+      }
+
+      if (has_transparency == MagickFalse)
+        {
+          /* RGB mode (color type 2) */
+          color_type=2;
+          bpp=3;
+          for (fi=0; fi < frame_count; fi++)
+          {
+            encoded_pixels[fi]=(unsigned char *) AcquireQuantumMemory(np,3);
+            if (encoded_pixels[fi] == (unsigned char *) NULL)
+              {
+                CleanupFramePixels(encoded_pixels,frame_count);
+                palette=(APNGColor *) RelinquishMagickMemory(palette);
+                hash_head=(short *) RelinquishMagickMemory(hash_head);
+                hash_next=(short *) RelinquishMagickMemory(hash_next);
+                CleanupFramePixels(frame_pixels,frame_count);
+                (void) CloseBlob(image);
+                ThrowWriterException(ResourceLimitError,"MemoryAllocationFailed");
+              }
+            for (px=0; px < np; px++)
+            {
+              encoded_pixels[fi][px*3]=frame_pixels[fi][px*4];
+              encoded_pixels[fi][px*3+1]=frame_pixels[fi][px*4+1];
+              encoded_pixels[fi][px*3+2]=frame_pixels[fi][px*4+2];
+            }
+          }
+        }
+      else
+        {
+          /* RGBA mode (color type 6) */
+          color_type=6;
+          bpp=4;
+          for (fi=0; fi < frame_count; fi++)
+            encoded_pixels[fi]=frame_pixels[fi];
         }
     }
-  }
+
   /*
     Write PNG signature.
   */
@@ -1431,13 +1620,68 @@ static MagickBooleanType WriteAPNGImage(const ImageInfo *image_info,
 
     WriteAPNGInt(ihdr,gw);
     WriteAPNGInt(ihdr+4,gh);
-    ihdr[8]=8;   /* bit depth */
-    ihdr[9]=6;   /* color type: RGBA */
-    ihdr[10]=0;  /* compression */
-    ihdr[11]=0;  /* filter */
-    ihdr[12]=0;  /* interlace */
+    ihdr[8]=8;           /* bit depth */
+    ihdr[9]=(unsigned char) color_type;
+    ihdr[10]=0;          /* compression */
+    ihdr[11]=0;          /* filter */
+    ihdr[12]=0;          /* interlace */
     (void) WritePNGChunk(image,"IHDR",ihdr,13,exception);
   }
+  /*
+    Write PLTE and tRNS chunks if indexed color mode.
+  */
+  if (color_type == 3)
+    {
+      unsigned char
+        *plte;
+
+      size_t
+        i,
+        plte_len;
+
+      plte_len=color_count*3;
+      plte=(unsigned char *) AcquireQuantumMemory(plte_len,sizeof(*plte));
+      if (plte != (unsigned char *) NULL)
+        {
+          for (i=0; i < color_count; i++)
+          {
+            plte[i*3]=palette[i].r;
+            plte[i*3+1]=palette[i].g;
+            plte[i*3+2]=palette[i].b;
+          }
+          (void) WritePNGChunk(image,"PLTE",plte,(unsigned int) plte_len,exception);
+          plte=(unsigned char *) RelinquishMagickMemory(plte);
+        }
+
+      /* Check for tRNS chunk */
+      {
+        ssize_t
+          last_trns = -1;
+
+        for (i=0; i < color_count; i++)
+          if (palette[i].a < 255)
+            last_trns=(ssize_t) i;
+
+        if (last_trns >= 0)
+          {
+            unsigned char
+              *trns;
+
+            size_t
+              trns_len;
+
+            trns_len=(size_t) (last_trns+1);
+            trns=(unsigned char *) AcquireQuantumMemory(trns_len,sizeof(*trns));
+            if (trns != (unsigned char *) NULL)
+              {
+                for (i=0; i < trns_len; i++)
+                  trns[i]=palette[i].a;
+                (void) WritePNGChunk(image,"tRNS",trns,(unsigned int) trns_len,exception);
+                trns=(unsigned char *) RelinquishMagickMemory(trns);
+              }
+          }
+      }
+    }
   /*
     Write acTL chunk (animation control).
   */
@@ -1467,7 +1711,14 @@ static MagickBooleanType WriteAPNGImage(const ImageInfo *image_info,
       comp_size;
 
     unsigned char
-      *comp_data;
+      *comp_data,
+      *sub_pixels;
+
+    unsigned int
+      sub_h,
+      sub_w,
+      sub_x,
+      sub_y;
 
     unsigned short
       delay_den,
@@ -1500,6 +1751,89 @@ static MagickBooleanType WriteAPNGImage(const ImageInfo *image_info,
         delay_num=(unsigned short) (delay_num/a_v);
         delay_den=(unsigned short) (delay_den/a_v);
       }
+
+    /*
+      Determine bounding box for frame sub-rectangle.
+    */
+    if (fi == 0)
+      {
+        sub_x=0;
+        sub_y=0;
+        sub_w=gw;
+        sub_h=gh;
+      }
+    else
+      {
+        unsigned int
+          max_x,max_y,min_x,min_y,x,y;
+
+        const unsigned char
+          *curr_f,
+          *prev_f;
+
+        curr_f=encoded_pixels[fi];
+        prev_f=encoded_pixels[fi-1];
+        min_x=gw; min_y=gh;
+        max_x=0; max_y=0;
+
+        for (y=0; y < gh; y++)
+        {
+          for (x=0; x < gw; x++)
+          {
+            size_t p_off = ((size_t) y*gw + (size_t) x) * (size_t) bpp;
+            if (memcmp(&curr_f[p_off], &prev_f[p_off], bpp) != 0)
+              {
+                if (x < min_x) min_x = x;
+                if (x > max_x) max_x = x;
+                if (y < min_y) min_y = y;
+                if (y > max_y) max_y = y;
+              }
+          }
+        }
+
+        if (min_x > max_x || min_y > max_y)
+          {
+            /* Frames are identical */
+            sub_x=0;
+            sub_y=0;
+            sub_w=1;
+            sub_h=1;
+          }
+        else
+          {
+            sub_x=min_x;
+            sub_y=min_y;
+            sub_w=max_x-min_x+1;
+            sub_h=max_y-min_y+1;
+          }
+      }
+
+    /*
+      Extract sub-rectangle pixels.
+    */
+    sub_pixels=(unsigned char *) AcquireQuantumMemory((size_t) sub_w * (size_t) sub_h, (size_t) bpp);
+    if (sub_pixels == (unsigned char *) NULL)
+      {
+        if (color_type != 6)
+          CleanupFramePixels(encoded_pixels,frame_count);
+        palette=(APNGColor *) RelinquishMagickMemory(palette);
+        hash_head=(short *) RelinquishMagickMemory(hash_head);
+        hash_next=(short *) RelinquishMagickMemory(hash_next);
+        CleanupFramePixels(frame_pixels,frame_count);
+        (void) CloseBlob(image);
+        ThrowWriterException(ResourceLimitError,"MemoryAllocationFailed");
+      }
+
+    {
+      unsigned int y;
+      for (y=0; y < sub_h; y++)
+      {
+        size_t src_off = (((size_t) (sub_y+y)*gw) + (size_t) sub_x) * (size_t) bpp;
+        size_t dst_off = ((size_t) y*sub_w) * (size_t) bpp;
+        (void) memcpy(&sub_pixels[dst_off], &encoded_pixels[fi][src_off], (size_t) sub_w * (size_t) bpp);
+      }
+    }
+
     /*
       Write fcTL chunk.
     */
@@ -1509,30 +1843,38 @@ static MagickBooleanType WriteAPNGImage(const ImageInfo *image_info,
 
       WriteAPNGInt(fctl,seq_num);
       seq_num++;
-      WriteAPNGInt(fctl+4,gw);
-      WriteAPNGInt(fctl+8,gh);
-      WriteAPNGInt(fctl+12,0);  /* x_offset */
-      WriteAPNGInt(fctl+16,0);  /* y_offset */
+      WriteAPNGInt(fctl+4,sub_w);
+      WriteAPNGInt(fctl+8,sub_h);
+      WriteAPNGInt(fctl+12,sub_x);
+      WriteAPNGInt(fctl+16,sub_y);
       fctl[20]=(unsigned char) ((delay_num >> 8) & 0xff);
       fctl[21]=(unsigned char) (delay_num & 0xff);
       fctl[22]=(unsigned char) ((delay_den >> 8) & 0xff);
       fctl[23]=(unsigned char) (delay_den & 0xff);
-      fctl[24]=has_transparency != MagickFalse ? 1 : 0;
+      fctl[24]=0;  /* dispose_op: NONE */
       fctl[25]=0;  /* blend_op: SOURCE */
       (void) WritePNGChunk(image,"fcTL",fctl,26,exception);
     }
     /*
-      Compress frame data.
+      Compress sub-rectangle frame data.
     */
     comp_data=(unsigned char *) NULL;
     comp_size=0;
-    if (CompressAPNGFrame(frame_pixels[fi],(int) gw,(int) gh,
+    if (CompressAPNGFrame(sub_pixels,(int) sub_w,(int) sub_h,bpp,
         &comp_data,&comp_size) == MagickFalse)
       {
+        sub_pixels=(unsigned char *) RelinquishMagickMemory(sub_pixels);
+        if (color_type != 6)
+          CleanupFramePixels(encoded_pixels,frame_count);
+        palette=(APNGColor *) RelinquishMagickMemory(palette);
+        hash_head=(short *) RelinquishMagickMemory(hash_head);
+        hash_next=(short *) RelinquishMagickMemory(hash_next);
         CleanupFramePixels(frame_pixels,frame_count);
         (void) CloseBlob(image);
         ThrowWriterException(CoderError,"APNGCompressFailed");
       }
+    sub_pixels=(unsigned char *) RelinquishMagickMemory(sub_pixels);
+
     if (fi == 0)
       {
         /*
@@ -1557,6 +1899,11 @@ static MagickBooleanType WriteAPNGImage(const ImageInfo *image_info,
         if (fdat == (unsigned char *) NULL)
           {
             comp_data=(unsigned char *) RelinquishMagickMemory(comp_data);
+            if (color_type != 6)
+              CleanupFramePixels(encoded_pixels,frame_count);
+            palette=(APNGColor *) RelinquishMagickMemory(palette);
+            hash_head=(short *) RelinquishMagickMemory(hash_head);
+            hash_next=(short *) RelinquishMagickMemory(hash_next);
             CleanupFramePixels(frame_pixels,frame_count);
             (void) CloseBlob(image);
             ThrowWriterException(ResourceLimitError,"MemoryAllocationFailed");
@@ -1568,11 +1915,6 @@ static MagickBooleanType WriteAPNGImage(const ImageInfo *image_info,
         fdat=(unsigned char *) RelinquishMagickMemory(fdat);
       }
     comp_data=(unsigned char *) RelinquishMagickMemory(comp_data);
-    /*
-      Free frame pixels early.
-    */
-    frame_pixels[fi]=(unsigned char *)
-      RelinquishMagickMemory(frame_pixels[fi]);
     fi++;
   }
   /*
@@ -1583,6 +1925,11 @@ static MagickBooleanType WriteAPNGImage(const ImageInfo *image_info,
   /*
     Cleanup.
   */
+  if (color_type != 6)
+    CleanupFramePixels(encoded_pixels,frame_count);
+  palette=(APNGColor *) RelinquishMagickMemory(palette);
+  hash_head=(short *) RelinquishMagickMemory(hash_head);
+  hash_next=(short *) RelinquishMagickMemory(hash_next);
   CleanupFramePixels(frame_pixels,frame_count);
   return(MagickTrue);
 }
