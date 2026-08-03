@@ -73,8 +73,8 @@ MAGICKCORE_JP2_SRCS = coders/jp2.c
 endif
 
 if PNG_DELEGATE
-MAGICKCORE_PNG_MODULES = coders/png.la
-MAGICKCORE_PNG_SRCS = coders/png.c
+MAGICKCORE_PNG_MODULES = coders/apng.la coders/png.la
+MAGICKCORE_PNG_SRCS = coders/apng.c coders/png.c
 endif
 
 if TIFF_DELEGATE
@@ -114,7 +114,6 @@ MAGICK_CODER_CPPFLAGS = \
 MAGICKCORE_CODER_SRCS = \
 	coders/aai.c \
 	coders/aai.h \
-	coders/apng.c \
 	coders/apng.h \
 	coders/art.c \
 	coders/art.h \
@@ -558,7 +557,6 @@ CODERS_NOINST_HDRS = \
 if WITH_MODULES
 coders_LTLIBRARIES = \
 	coders/aai.la \
-	coders/apng.la \
 	coders/art.la \
 	coders/ashlar.la \
 	coders/avs.la \
