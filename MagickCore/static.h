@@ -34,6 +34,7 @@ extern MagickExport void
 
 extern ModuleExport size_t
   RegisterAAIImage(void),
+  RegisterANIImage(void),
   RegisterAPNGImage(void),
   RegisterARTImage(void),
   RegisterASHLARImage(void),
@@ -177,6 +178,7 @@ extern ModuleExport size_t
 
 extern ModuleExport void
   UnregisterAAIImage(void),
+  UnregisterANIImage(void),
   UnregisterAPNGImage(void),
   UnregisterARTImage(void),
   UnregisterASHLARImage(void),

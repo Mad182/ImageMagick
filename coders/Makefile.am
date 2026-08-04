@@ -114,6 +114,8 @@ MAGICK_CODER_CPPFLAGS = \
 MAGICKCORE_CODER_SRCS = \
 	coders/aai.c \
 	coders/aai.h \
+	coders/ani.c \
+	coders/ani.h \
 	coders/apng.h \
 	coders/art.c \
 	coders/art.h \
@@ -405,6 +407,7 @@ MAGICKCORE_CODER_SRCS = \
 
 CODERS_NOINST_HDRS = \
 	coders/aai.h \
+	coders/ani.h \
 	coders/apng.h \
 	coders/art.h \
 	coders/ashlar.h \
@@ -557,6 +560,7 @@ CODERS_NOINST_HDRS = \
 if WITH_MODULES
 coders_LTLIBRARIES = \
 	coders/aai.la \
+	coders/ani.la \
 	coders/art.la \
 	coders/ashlar.la \
 	coders/avs.la \
@@ -704,6 +708,12 @@ coders_aai_la_SOURCES      = coders/aai.c
 coders_aai_la_CPPFLAGS     = $(MAGICK_CODER_CPPFLAGS)
 coders_aai_la_LDFLAGS      = $(MODULECOMMONFLAGS)
 coders_aai_la_LIBADD       = $(MAGICKCORE_LIBS)
+
+# ANI coder module
+coders_ani_la_SOURCES      = coders/ani.c
+coders_ani_la_CPPFLAGS     = $(MAGICK_CODER_CPPFLAGS)
+coders_ani_la_LDFLAGS      = $(MODULECOMMONFLAGS)
+coders_ani_la_LIBADD       = $(MAGICKCORE_LIBS)
 
 # APNG coder module
 coders_apng_la_SOURCES     = coders/apng.c
